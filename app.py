@@ -38,7 +38,7 @@ def get_employees():
                 active,
                 position,
                 address
-            FROM employees;
+            FROM tbc.employees;
         """)
         
         rows = cursor.fetchall()
