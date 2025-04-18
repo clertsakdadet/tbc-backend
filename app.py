@@ -19,38 +19,40 @@ def get_db_connection():
 
 @app.route("/api/employees", methods=["GET"])
 def get_employees():
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT 
-            id,
-            first_name,
-            preferred_name,
-            middle_name,
-            last_name,
-            role,
-            phone_number,
-            email,
-            hire_date,
-            end_date,
-            active,
-            position,
-            address
-        FROM employees;
-    """)
-    
-    rows = cursor.fetchall()
-    columns = [desc[0] for desc in cursor.description]
+        cursor.execute("""
+            SELECT 
+                id,
+                first_name,
+                preferred_name,
+                middle_name,
+                last_name,
+                role,
+                phone_number,
+                email,
+                hire_date,
+                end_date,
+                active,
+                position,
+                address
+            FROM employees;
+        """)
+        
+        rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        employees = [dict(zip(columns, row)) for row in rows]
 
-    # Convert rows to list of dicts
-    employees = [dict(zip(columns, row)) for row in rows]
+        cursor.close()
+        conn.close()
 
-    cursor.close()
-    conn.close()
+        return jsonify(employees)
 
-    return jsonify(employees)
-
+    except Exception as e:
+        print("❌ ERROR IN /api/employees:", e)
+        return jsonify({"error": "Internal Server Error"}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
