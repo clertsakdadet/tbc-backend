@@ -7,9 +7,9 @@ import os
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Allow frontend to access backend
+CORS(app)  # Allows frontend (Vercel) to access backend
 
-# --- Database Connection Function ---
+# Establish connection
 def get_db_connection():
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     return conn
@@ -42,8 +42,8 @@ def get_employees():
                 position,
                 address
             FROM tbc.employees;
-        """)  # << If your table is inside 'tbc' schema
-
+        """) # << If your table is inside 'tbc' schema
+        
         rows = cursor.fetchall()
         columns = [desc[0] for desc in cursor.description]
         employees = [dict(zip(columns, row)) for row in rows]
@@ -52,9 +52,9 @@ def get_employees():
         conn.close()
 
         return jsonify(employees)
-    
+
     except Exception as e:
-        print("Error in /api/employees:", e)
+        print("ERROR IN /api/employees:", e)
         return jsonify({"error": "Internal Server Error"}), 500
 
 # --- Main Entry ---
