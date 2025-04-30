@@ -89,7 +89,14 @@ def get_shifts():
 
         rows = cursor.fetchall()
         columns = [desc[0] for desc in cursor.description]
-        shifts = [dict(zip(columns, row)) for row in rows]
+        shifts = []
+        for row in rows:
+            record = dict(zip(columns, row))
+            # Convert time/date fields to string
+            record["shift_date"] = record["shift_date"].isoformat() # this ensures shift_date → "2023-07-07"
+            record["time_in"] = record["time_in"].isoformat() # this ensures time_in → "17:00:00"
+            record["time_out"] = record["time_out"].isoformat() # this ensures time_out → "20:30:00"
+            shifts.append(record)
 
         cursor.close()
         conn.close()
