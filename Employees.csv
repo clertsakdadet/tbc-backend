@@ -1,6 +1,6 @@
-﻿id,first_name,preferred_name,middle_name,last_name,role,phone_number,email,hire_date,end_date,active,position,address
-1,Chalermpon,Pon,,Lertsakdadet,Both,909-330-9260,clertsakdadet@gmail.com,4/1/2024,,Yes,Manager,"10992 Scarlet St, Loma Linda, 92354"
-2,Sitarangsi,Sitar,,Watanapanee,Both,840-677-9463,sitarangsi.w@gmail.com,4/1/2024,,Yes,Senior Server,"10993 Scarlet St, Loma Linda, 92354"
+﻿id,first_name,preferred_name,middle_name,last_name,role,phone_number,email,start_date,end_date,is_active,position,address
+1,Chalermpon,Pon,,Lertsakdadet,Both,909-330-9260,clertsakdadet@gmail.com,4/1/2024,,Yes,Manager,"25581 Nikcs Avenue, Loma Linda, 92354"
+2,Sitarangsi,Sitar,,Watanapanee,Both,840-677-9463,sitarangsi.w@gmail.com,4/1/2024,,Yes,Senior Server,"25581 Nikcs Avenue, Loma Linda, 92354"
 3,Hector,Hector,,Ulloa,Back,,,3/1/2024,7/30/2025,No,Line Cook,
 4,Minh,Minh,T,Dahse,Front,,,1/1/2023,3/31/2025,No,Server,"2254 Waterford Way, Colton, CA 92324"
 5,Erick,Erick,D,Peralta,Back,,,11/1/2023,,Yes,Line Cook,"25129 Palm Ave, Loma Linda, CA 92354"
@@ -11,3 +11,5 @@
 10,Ronald,Josh,Josh M,Pangan,Front,,,1/1/2023,3/31/2025,Yes,Server,"24961 Evans Ln, Highland, CA 92346"
 11,Brandon,Brandon,H,Le,Front,,,3/1/2017,,Yes,Server,"2585 Pleasant Way, San Bernardino, CA 92410"
 12,Luhxana ,Taew,,Katerungroch,Back,,,11/1/2024,,Yes,Line Cook,"1241 Amethyst Ave, Mentone, CA 92359"
+13,Axel,Axel,,,Front,,,11/1/2022,12/31/2023,No,Line Cook,
+14,Thammanit,Hui,,Sawangchad,Back,,,4/15/2024,7/31/2024,No,Line Cook,"10993 Scarlet St, Loma Linda, 92354"
