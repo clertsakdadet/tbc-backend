@@ -30,6 +30,7 @@ def ping():
 @app.route("/api/fetch-clover-shifts", methods=["POST"])
 def fetch_clover_shifts():
     try:
+        print("=== Clover Shift Fetch Started ===")
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -37,21 +38,37 @@ def fetch_clover_shifts():
         data = request.json
         employee_id = data.get("employee_id")
         if not employee_id:
+            print("Missing employee_id in request")
             return jsonify({"error": "employee_id is required"}), 400
+        print(f"Fetching shifts for employee_id: {employee_id}")
 
         # Step 1: Get Clover employee ID
-        cursor.execute("SELECT clover_employee_id FROM tbc.clover_employee_map WHERE employee_id = %s", (employee_id,))
-        row = cursor.fetchone()
-        if not row:
-            return jsonify({"error": "Clover employee mapping not found"}), 404
-
-        clover_emp_id = row["clover_employee_id"]
+        try:
+            cursor.execute(
+                "SELECT clover_employee_id FROM tbc.clover_employee_map WHERE employee_id = %s",
+                (employee_id,))
+            row = cursor.fetchone()
+            if not row:
+                print("No Clover mapping found for employee")
+                return jsonify({"error": "Clover employee mapping not found"}), 404
+            clover_emp_id = row["clover_employee_id"]
+            print(f"Found Clover employee ID: {clover_emp_id}")
+        except Exception as map_err:
+            print("Error fetching Clover employee mapping:", map_err)
+            raise
 
         # Step 2: Determine date range to fetch
-        cursor.execute("SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s", (employee_id,))
-        max_date_row = cursor.fetchone()
-        start_date = (max_date_row["max"] or datetime.today().date() - timedelta(days=7)) + timedelta(days=1)
-        end_date = datetime.today().date()
+        try:
+            cursor.execute(
+                "SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s",
+                (employee_id,))
+            max_date_row = cursor.fetchone()
+            start_date = (max_date_row["max"] or datetime.today().date() - timedelta(days=7)) + timedelta(days=1)
+            end_date = datetime.today().date()
+            print(f"Fetching data from Clover between {start_date} and {end_date}")
+        except Exception as date_err:
+            print("Error determining date range:", date_err)
+            raise
 
         # Convert to milliseconds for Clover API (start of day to end of today)
         start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
@@ -69,12 +86,16 @@ def fetch_clover_shifts():
             ("filter", f"in_and_override_time>{start_ms}"),
             ("filter", f"in_and_override_time<{end_ms}")
         ]
-
+        print(f"Sending request to Clover API...\nURL: {clover_url}\nParams: {params}")
         response = requests.get(clover_url, headers=headers, params=params)
+        
         if response.status_code != 200:
+            print(f"Clover API failed with status {response.status_code}")
+            print("Response:", response.text)
             return jsonify({"error": "Failed to fetch from Clover", "details": response.text}), 500
 
         clover_shifts = response.json().get("elements", [])
+        print(f"Fetched {len(clover_shifts)} shifts from Clover")
 
         # Step 4: Prepare and insert shift data
         inserted_count = 0
@@ -104,15 +125,18 @@ def fetch_clover_shifts():
                 print(f"Failed to insert shift: {insert_err}")
 
         conn.commit()
-        cursor.close()
-        conn.close()
-
+        print(f"{inserted_count} new shifts inserted.")
         return jsonify({"status": "success", "inserted": inserted_count})
-
     except Exception as e:
         print("ERROR IN /api/fetch_clover_shifts:", e)
         return jsonify({"error": "Internal Server Error"}), 500
 
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
 
 def determine_shift_label(time_obj):
     # Uses current logic from earlier conversation
