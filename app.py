@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 import psycopg2
 import requests
 from flask import request, jsonify
+from datetime import datetime, timedelta
+from psycopg2.extras import RealDictCursor
 import os   
 
 load_dotenv()
@@ -27,53 +29,100 @@ def ping():
 
 @app.route("/api/fetch-clover-shifts", methods=["POST"])
 def fetch_clover_shifts():
-    data = request.get_json()
-    start_time = data.get("start_time")  # UNIX epoch (ms)
-    end_time = data.get("end_time")      # UNIX epoch (ms)
-
-    if not start_time or not end_time:
-        return jsonify({"error": "start_time and end_time are required"}), 400
-
-    url = f"{CLOVER_BASE_URL}/{CLOVER_MERCHANT_ID}/shifts"
-    headers = {
-        "Authorization": f"Bearer {CLOVER_ACCESS_TOKEN}",
-        "Accept": "application/json"
-    }
-    params = {
-        "expand": "employee",
-        "filter": [
-            "has_in_time=true",
-            f"in_and_override_time>{start_time}",
-            f"in_and_override_time<{end_time}"
-        ]
-    }
-
     try:
-        res = requests.get(url, headers=headers, params=params)
-        res.raise_for_status()
-        data = res.json().get("elements", [])
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Optional: Normalize data for preview
-        shifts = []
-        for s in data:
-            employee = s.get("employee", {})
-            shifts.append({
-                "shift_id": s.get("id"),
-                "clover_employee_id": employee.get("id"),
-                "employee_name": employee.get("name"),
-                "start": s.get("inTime"),     # or use 'inAndOverrideTime'
-                "end": s.get("outTime"),      # or 'outAndOverrideTime'
-                "override": {
-                    "in": s.get("inAndOverrideTime"),
-                    "out": s.get("outAndOverrideTime")
-                }
-            })
+        # Get employee_id from request
+        data = request.json
+        employee_id = data.get("employee_id")
+        if not employee_id:
+            return jsonify({"error": "employee_id is required"}), 400
 
-        return jsonify(shifts)
+        # Step 1: Get Clover employee ID
+        cursor.execute("SELECT clover_employee_id FROM tbc.clover_employee_map WHERE employee_id = %s", (employee_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"error": "Clover employee mapping not found"}), 404
+
+        clover_emp_id = row["clover_employee_id"]
+
+        # Step 2: Determine date range to fetch
+        cursor.execute("SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s", (employee_id,))
+        max_date_row = cursor.fetchone()
+        start_date = (max_date_row["max"] or datetime.today().date() - timedelta(days=7)) + timedelta(days=1)
+        end_date = datetime.today().date()
+
+        # Convert to milliseconds for Clover API (start of day to end of today)
+        start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
+        end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+
+        # Step 3: Fetch from Clover
+        clover_url = f"{CLOVER_BASE_URL}/v3/merchants/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
+        headers = {
+            "Authorization": f"Bearer {CLOVER_ACCESS_TOKEN}",
+            "Accept": "application/json"
+        }
+        params = [
+            ("expand", "employee"),
+            ("filter", "has_in_time=true"),
+            ("filter", f"in_and_override_time>{start_ms}"),
+            ("filter", f"in_and_override_time<{end_ms}")
+        ]
+
+        response = requests.get(clover_url, headers=headers, params=params)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to fetch from Clover", "details": response.text}), 500
+
+        clover_shifts = response.json().get("elements", [])
+
+        # Step 4: Prepare and insert shift data
+        inserted_count = 0
+        for shift in clover_shifts:
+            try:
+                in_ts = datetime.fromtimestamp(shift["inTime"] / 1000)
+                out_ts = datetime.fromtimestamp(shift["outTime"] / 1000)
+                shift_date = in_ts.date()
+                decimal_hours = round((out_ts - in_ts).total_seconds() / 3600, 2)
+
+                cursor.execute("""
+                    INSERT INTO tbc.shifts_dummy_20250719 (
+                        employee_id, shift_date, time_in, time_out, work_area, shift_label, decimal_hours, notes
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    employee_id,
+                    shift_date,
+                    in_ts.time(),
+                    out_ts.time(),
+                    "unknown",  # default until manual update
+                    determine_shift_label(in_ts.time()),
+                    decimal_hours,
+                    f"Clover ID: {shift.get('id')}"
+                ))
+                inserted_count += 1
+            except Exception as insert_err:
+                print(f"Failed to insert shift: {insert_err}")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"status": "success", "inserted": inserted_count})
 
     except Exception as e:
-        print(f"Error fetching shifts from Clover: {e}")
-        return jsonify({"error": "Failed to fetch shifts"}), 500
+        print("ERROR IN /api/fetch_clover_shifts:", e)
+        return jsonify({"error": "Internal Server Error"}), 500
+
+
+def determine_shift_label(time_obj):
+    # Uses current logic from earlier conversation
+    if time_obj < datetime.strptime("14:30", "%H:%M").time():
+        return "Lunch"
+    elif time_obj < datetime.strptime("17:00", "%H:%M").time():
+        return "Break"
+    else:
+        return "Dinner"
+
 
 # --- Employees API ---
 @app.route("/api/employees", methods=["GET"])
@@ -132,7 +181,7 @@ def get_shifts():
             s.shift_label,
             s.decimal_hours,
             s.notes
-        FROM tbc.shifts s
+        FROM tbc.shifts_dummy_20250719 s
         JOIN tbc.employees e ON s.employee_id = e.id
         ORDER BY s.shift_date DESC, s.time_in ASC;
     """)
