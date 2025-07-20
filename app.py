@@ -151,7 +151,6 @@ def fetch_clover_shifts():
             try:
                 in_ms = shift.get("overrideInTime") or shift.get("inTime")
                 out_ms = shift.get("overrideOutTime") or shift.get("outTime")
-
                 in_ts = datetime.fromtimestamp(in_ms / 1000, tz=pacific)
                 out_ts = datetime.fromtimestamp(out_ms / 1000, tz=pacific)
                 shift_date = in_ts.date()
