@@ -29,7 +29,7 @@ def ping():
     return jsonify({"message": "pong"})
 
 @app.route('/api/shifts-of-employee', methods=['GET'])
-def get_shifts():
+def get_shifts_of_employee():
     clover_emp_id = 11
     clover_url = f"https://api.clover.com/v3/merchants/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
     headers = {
