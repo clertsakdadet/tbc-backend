@@ -6,6 +6,7 @@ import requests
 from flask import request, jsonify
 from datetime import datetime, timedelta
 from psycopg2.extras import RealDictCursor
+from urllib.parse import urlencode
 import os   
 
 load_dotenv()
@@ -26,6 +27,38 @@ def get_db_connection():
 @app.route("/ping")
 def ping():
     return jsonify({"message": "pong"})
+
+@app.route('api/shifts-of-employee', methods=['GET'])
+def get_shifts():
+    clover_emp_id = 11
+    clover_url = f"https://api.clover.com/v3/merchants/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
+    headers = {
+        "Authorization": f"Bearer {CLOVER_ACCESS_TOKEN}",
+        "Accept": "application/json"
+    }
+    params = [
+        ("expand", "employee"),
+        ("filter", "has_in_time=true"),
+        ("filter", "in_and_override_time>1747119600000"),
+        ("filter", "in_and_override_time<1747634340000")
+    ]
+    
+    # Log the full URL
+    query_string = urlencode(params, doseq=True)
+    full_url = f"{clover_url}?{query_string}"
+    print(f"Sending request to: {full_url}")
+    
+    try:
+        response = requests.get(clover_url, headers=headers, params=params)
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text}")
+        return jsonify({
+            "status_code": response.status_code,
+            "data": response.json()
+        })
+    except requests.RequestException as e:
+        print(f"Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/fetch-clover-shifts", methods=["POST"])
 def fetch_clover_shifts():
