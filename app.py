@@ -30,7 +30,7 @@ def ping():
 
 @app.route('/api/shifts-of-employee', methods=['GET'])
 def get_shifts_of_employee():
-    clover_emp_id = 11
+    clover_emp_id = 'H776EYJH0M2FY'
     clover_url = f"https://api.clover.com/v3/merchants/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
     headers = {
         "Authorization": f"Bearer {CLOVER_ACCESS_TOKEN}",
@@ -39,8 +39,8 @@ def get_shifts_of_employee():
     params = [
         ("expand", "employee"),
         ("filter", "has_in_time=true"),
-        ("filter", "in_and_override_time>1747119600000"),
-        ("filter", "in_and_override_time<1747634340000")
+        ("filter", "in_and_override_time>1752288000000"), #July 12, 2025, 00:00:00 GMT.
+        ("filter", "in_and_override_time<1752710400000") #July 15, 2025, 00:00:00 GMT.  
     ]
     
     # Log the full URL
@@ -89,8 +89,23 @@ def fetch_clover_shifts():
         except Exception as map_err:
             print("Error fetching Clover employee mapping:", map_err)
             raise
+        
+        # Step 2: Get employee role from tbc.employees
+        try:
+            cursor.execute(
+                "SELECT role FROM tbc.employees WHERE id = %s",
+                (employee_id,))
+            row = cursor.fetchone()
+            if not row:
+                print("No employee found for employee_id")
+                return jsonify({"error": "Employee not found"}), 404
+            work_area = row["role"]
+            print(f"Employee role (work_area): {work_area}")
+        except Exception as role_err:
+            print("Error fetching employee role:", role_err)
+            raise
 
-        # Step 2: Determine date range to fetch
+        # Step 3: Determine date range to fetch
         try:
             cursor.execute(
                 "SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s",
@@ -103,12 +118,12 @@ def fetch_clover_shifts():
             print("Error determining date range:", date_err)
             raise
 
-        # Convert to milliseconds for Clover API (start of day to end of today)
+        # Convert to milliseconds for Clover API ('start of day' to 'end of today' ensuring the latest shifts are included)
         start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
         end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
 
-        # Step 3: Fetch from Clover
-        clover_url = f"{CLOVER_BASE_URL}/v3/merchants/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
+        # Step 4: Fetch from Clover
+        clover_url = f"{CLOVER_BASE_URL}/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
         headers = {
             "Authorization": f"Bearer {CLOVER_ACCESS_TOKEN}",
             "Accept": "application/json"
@@ -130,38 +145,42 @@ def fetch_clover_shifts():
         clover_shifts = response.json().get("elements", [])
         print(f"Fetched {len(clover_shifts)} shifts from Clover")
 
-        # Step 4: Prepare and insert shift data
-        inserted_count = 0
+        preview_data = []
         for shift in clover_shifts:
             try:
-                in_ts = datetime.fromtimestamp(shift["inTime"] / 1000)
-                out_ts = datetime.fromtimestamp(shift["outTime"] / 1000)
+                in_ms = shift.get("overrideInTime") or shift.get("inTime")
+                out_ms = shift.get("overrideOutTime") or shift.get("outTime")
+
+                in_ts = datetime.fromtimestamp(in_ms / 1000)
+                out_ts = datetime.fromtimestamp(out_ms / 1000)
                 shift_date = in_ts.date()
+                # time_in = in_ts.strftime("%H:%M:%S")
+                # time_out = out_ts.strftime("%H:%M:%S")
+                time_in = in_ts.strftime("%H:%M:00") # Ensures time_in is in HH:MM:00 format
+                time_out = out_ts.strftime("%H:%M:00") # Ensures time_out is in HH:MM:00 format
                 decimal_hours = round((out_ts - in_ts).total_seconds() / 3600, 2)
+                shift_label = determine_shift_label(in_ts.time())
 
-                cursor.execute("""
-                    INSERT INTO tbc.shifts_dummy_20250719 (
-                        employee_id, shift_date, time_in, time_out, work_area, shift_label, decimal_hours, notes
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    employee_id,
-                    shift_date,
-                    in_ts.time(),
-                    out_ts.time(),
-                    "unknown",  # default until manual update
-                    determine_shift_label(in_ts.time()),
-                    decimal_hours,
-                    f"Clover ID: {shift.get('id')}"
-                ))
-                inserted_count += 1
-            except Exception as insert_err:
-                print(f"Failed to insert shift: {insert_err}")
+                preview_data.append({
+                    "employee_id": employee_id,
+                    "shift_date": str(shift_date),
+                    "time_in": time_in,
+                    "time_out": time_out,
+                    "work_area": work_area,  # Use role from tbc.employees
+                    "shift_label": shift_label,
+                    "decimal_hours": decimal_hours,
+                    "notes": f"Clover ID: {shift.get('id')}"
+                })
+            except Exception as parse_err:
+                print("Failed to parse shift record:", parse_err)
+        
+        # Sort preview_data by shift_date in ascending order
+        preview_data = sorted(preview_data, key=lambda x: datetime.strptime(x["shift_date"], "%Y-%m-%d").date())
 
-        conn.commit()
-        print(f"{inserted_count} new shifts inserted.")
-        return jsonify({"status": "success", "inserted": inserted_count})
+        return jsonify({"status": "success", "preview": preview_data})
+
     except Exception as e:
-        print("ERROR IN /api/fetch_clover_shifts:", e)
+        print("ERROR IN /api/fetch-clover-shifts:", e)
         return jsonify({"error": "Internal Server Error"}), 500
 
     finally:
@@ -180,6 +199,51 @@ def determine_shift_label(time_obj):
     else:
         return "Dinner"
 
+@app.route("/api/submit-clover-shifts", methods=["POST"])
+def submit_clover_shifts():
+    try:
+        print("=== Submitting Clover Shifts ===")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        data = request.json
+        shifts = data.get("shifts")
+
+        if not shifts:
+            return jsonify({"error": "No shift data provided"}), 400
+
+        insert_query = """
+            INSERT INTO tbc.shifts_dummy_20250719 (
+                employee_id, shift_date, time_in, time_out, work_area,
+                shift_label, decimal_hours, notes
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        for shift in shifts:
+            cursor.execute(insert_query, (
+                shift["employee_id"],
+                shift["shift_date"],
+                shift["time_in"],
+                shift["time_out"],
+                shift["work_area"],
+                shift["shift_label"],
+                shift["decimal_hours"],
+                shift["notes"]
+            ))
+
+        conn.commit()
+        return jsonify({"status": "success", "message": f"Inserted {len(shifts)} shifts"})
+
+    except Exception as e:
+        print("ERROR IN /api/submit_clover_shifts:", e)
+        return jsonify({"error": "Failed to insert shifts"}), 500
+
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
 
 # --- Employees API ---
 @app.route("/api/employees", methods=["GET"])
