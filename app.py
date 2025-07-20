@@ -28,7 +28,7 @@ def get_db_connection():
 def ping():
     return jsonify({"message": "pong"})
 
-@app.route('api/shifts-of-employee', methods=['GET'])
+@app.route('/api/shifts-of-employee', methods=['GET'])
 def get_shifts():
     clover_emp_id = 11
     clover_url = f"https://api.clover.com/v3/merchants/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
