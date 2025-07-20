@@ -7,6 +7,7 @@ from flask import request, jsonify
 from datetime import datetime, timedelta
 from psycopg2.extras import RealDictCursor
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 import os   
 
 load_dotenv()
@@ -144,18 +145,16 @@ def fetch_clover_shifts():
 
         clover_shifts = response.json().get("elements", [])
         print(f"Fetched {len(clover_shifts)} shifts from Clover")
-
+        pacific = ZoneInfo("America/Los_Angeles")
         preview_data = []
         for shift in clover_shifts:
             try:
                 in_ms = shift.get("overrideInTime") or shift.get("inTime")
                 out_ms = shift.get("overrideOutTime") or shift.get("outTime")
 
-                in_ts = datetime.fromtimestamp(in_ms / 1000)
-                out_ts = datetime.fromtimestamp(out_ms / 1000)
+                in_ts = datetime.fromtimestamp(in_ms / 1000, tz=pacific)
+                out_ts = datetime.fromtimestamp(out_ms / 1000, tz=pacific)
                 shift_date = in_ts.date()
-                # time_in = in_ts.strftime("%H:%M:%S")
-                # time_out = out_ts.strftime("%H:%M:%S")
                 time_in = in_ts.strftime("%H:%M:00") # Ensures time_in is in HH:MM:00 format
                 time_out = out_ts.strftime("%H:%M:00") # Ensures time_out is in HH:MM:00 format
                 decimal_hours = round((out_ts - in_ts).total_seconds() / 3600, 2)
