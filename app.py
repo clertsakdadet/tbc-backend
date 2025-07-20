@@ -156,7 +156,11 @@ def fetch_clover_shifts():
                 shift_date = in_ts.date()
                 time_in = in_ts.strftime("%H:%M:00") # Ensures time_in is in HH:MM:00 format
                 time_out = out_ts.strftime("%H:%M:00") # Ensures time_out is in HH:MM:00 format
-                decimal_hours = round((out_ts - in_ts).total_seconds() / 3600, 2)
+                
+                # Calculate decimal_hours using only hours and minutes
+                hours = out_ts.hour - in_ts.hour
+                minutes = out_ts.minute - in_ts.minute
+                decimal_hours = round(hours + minutes / 60, 2)
                 shift_label = determine_shift_label(in_ts.time())
 
                 preview_data.append({
