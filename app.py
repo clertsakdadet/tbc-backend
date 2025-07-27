@@ -201,6 +201,175 @@ def determine_shift_label(time_obj):
     else:
         return "Dinner"
 
+@app.route('/api/fetch-clover-shifts-bulk', methods=['POST'])
+def fetch_clover_shifts_bulk():
+    try:
+        print("=== Bulk Clover Shift Fetch Started ===")
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Step 1: Get all active employees with Clover mapping
+        cursor.execute("""
+            SELECT e.id AS employee_id, cem.clover_employee_id, e.role, e.preferred_name
+            FROM tbc.clover_employee_map cem
+            JOIN tbc.employees e ON cem.employee_id = e.id
+            WHERE e.is_active = TRUE
+        """)
+        employee_map = cursor.fetchall()
+        pacific = ZoneInfo("America/Los_Angeles")
+
+        imported = 0
+        skipped = 0
+        errors = []
+
+        for emp in employee_map:
+            employee_id = emp["employee_id"]
+            clover_emp_id = emp["clover_employee_id"]
+            work_area = emp["role"]
+            preferred_name = emp.get("preferred_name", "")
+            
+            print(f"Fetching shifts for employee_id: {employee_id} ({preferred_name})")
+
+            # Step 2: Determine date range to fetch
+            cursor.execute(
+                "SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s",
+                (employee_id,))
+            max_date_row = cursor.fetchone()
+            start_date = (max_date_row["max"] or datetime.today().date() - timedelta(days=7)) + timedelta(days=1)
+            end_date = datetime.today().date()
+
+            # Convert to milliseconds for Clover API
+            start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
+            end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+
+            # Step 3: Fetch from Clover
+            clover_url = f"{CLOVER_BASE_URL}/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
+            headers = {
+                "Authorization": f"Bearer {CLOVER_ACCESS_TOKEN}",
+                "Accept": "application/json"
+            }
+            params = [
+                ("expand", "employee"),
+                ("filter", "has_in_time=true"),
+                ("filter", f"in_and_override_time>{start_ms}"),
+                ("filter", f"in_and_override_time<{end_ms}")
+            ]
+            try:
+                response = requests.get(clover_url, headers=headers, params=params)
+                if response.status_code != 200:
+                    print(f"Failed for employee {employee_id}: {response.status_code}")
+                    errors.append({"employee_id": employee_id, "error": response.text})
+                    continue
+
+                clover_shifts = response.json().get("elements", [])
+                for shift in clover_shifts:
+                    try:
+                        in_ms = shift.get("overrideInTime") or shift.get("inTime")
+                        out_ms = shift.get("overrideOutTime") or shift.get("outTime")
+                        if not in_ms or not out_ms:
+                            skipped += 1
+                            continue
+                        in_ts = datetime.fromtimestamp(in_ms / 1000, tz=pacific)
+                        out_ts = datetime.fromtimestamp(out_ms / 1000, tz=pacific)
+                        shift_date = in_ts.date()
+                        time_in = in_ts.strftime("%H:%M:00")
+                        time_out = out_ts.strftime("%H:%M:00")
+                        hours = out_ts.hour - in_ts.hour
+                        minutes = out_ts.minute - in_ts.minute
+                        decimal_hours = round(hours + minutes / 60, 2)
+                        shift_label = determine_shift_label(in_ts.time())
+                        clover_shift_id = shift.get("id")
+
+                        # Insert into staged_shifts, avoid duplicates
+                        insert_query = """
+                            INSERT INTO tbc.staged_shifts (
+                                employee_id, clover_shift_id, shift_date, time_in, time_out,
+                                work_area, shift_label, decimal_hours, notes
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (employee_id, shift_date, time_in, time_out, clover_shift_id) DO NOTHING
+                        """
+                        cursor.execute(insert_query, (
+                            employee_id,
+                            clover_shift_id,
+                            shift_date,
+                            time_in,
+                            time_out,
+                            work_area,
+                            shift_label,
+                            decimal_hours,
+                            f"Clover ID: {clover_shift_id}"
+                        ))
+                        if cursor.rowcount == 1:
+                            imported += 1
+                        else:
+                            skipped += 1
+                    except Exception as parse_err:
+                        print(f"Failed to parse/insert shift for employee {employee_id}: {parse_err}")
+                        errors.append({"employee_id": employee_id, "error": str(parse_err)})
+                        skipped += 1
+                conn.commit()
+            except Exception as e:
+                print(f"Error fetching/inserting for employee {employee_id}: {e}")
+                errors.append({"employee_id": employee_id, "error": str(e)})
+                continue
+
+        # --- Fetch all staged shifts that have not been promoted ---
+        cursor.execute("""
+            SELECT 
+                ss.id,
+                ss.employee_id,
+                e.preferred_name,
+                ss.clover_shift_id,
+                ss.shift_date,
+                ss.time_in,
+                ss.time_out,
+                ss.work_area,
+                ss.shift_label,
+                ss.decimal_hours,
+                ss.notes
+            FROM tbc.staged_shifts ss
+            JOIN tbc.employees e ON ss.employee_id = e.id
+            WHERE ss.is_promoted = FALSE
+            ORDER BY ss.shift_date ASC, ss.time_in ASC
+        """)
+        preview_data = cursor.fetchall()
+
+        # Convert date/time fields to string for JSON serialization
+        for row in preview_data:
+            if isinstance(row["shift_date"], (datetime, )):
+                row["shift_date"] = row["shift_date"].date().isoformat()
+            elif hasattr(row["shift_date"], "isoformat"):
+                row["shift_date"] = row["shift_date"].isoformat()
+            if "time_in" in row and hasattr(row["time_in"], "isoformat"):
+                row["time_in"] = row["time_in"].isoformat()
+            if "time_out" in row and hasattr(row["time_out"], "isoformat"):
+                row["time_out"] = row["time_out"].isoformat()
+
+        # Sort preview_data by shift_date in ascending order
+        preview_data = sorted(
+            preview_data,
+            key=lambda x: datetime.strptime(x["shift_date"], "%Y-%m-%d").date()
+        )
+
+        return jsonify({
+            "status": "success",
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+            "preview": preview_data
+        })
+
+    except Exception as e:
+        print("ERROR IN /api/fetch-clover-shifts-bulk:", e)
+        return jsonify({"error": "Internal Server Error"}), 500
+
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
+
 @app.route("/api/submit-clover-shifts", methods=["POST"])
 def submit_clover_shifts():
     try:
@@ -219,8 +388,10 @@ def submit_clover_shifts():
                 employee_id, shift_date, time_in, time_out, work_area,
                 shift_label, decimal_hours, notes
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
         """
 
+        promoted_ids = []
         for shift in shifts:
             cursor.execute(insert_query, (
                 shift["employee_id"],
@@ -232,9 +403,19 @@ def submit_clover_shifts():
                 shift["decimal_hours"],
                 shift["notes"]
             ))
+            # Collect staged shift id for promotion if present
+            if "id" in shift:
+                promoted_ids.append(shift["id"])
+
+        # Mark corresponding staged_shifts as promoted
+        if promoted_ids:
+            cursor.execute(
+                f"UPDATE tbc.staged_shifts SET is_promoted = TRUE WHERE id = ANY(%s)",
+                (promoted_ids,)
+            )
 
         conn.commit()
-        return jsonify({"status": "success", "message": f"Inserted {len(shifts)} shifts"})
+        return jsonify({"status": "success", "message": f"Inserted {len(shifts)} shifts and promoted {len(promoted_ids)} staged shifts."})
 
     except Exception as e:
         print("ERROR IN /api/submit_clover_shifts:", e)
