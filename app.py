@@ -7,8 +7,10 @@ from flask import request, jsonify
 from datetime import datetime, timedelta
 from psycopg2.extras import RealDictCursor
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
+import zoneinfo
+from datetime import timezone # Use UTC for start_ms and end_ms
 import os   
+from utils import clover_time_handler
 
 load_dotenv()
 
@@ -94,6 +96,7 @@ def fetch_clover_shifts():
         # Step 2: Get employee role from tbc.employees
         try:
             cursor.execute(
+                # IMPORTANT: Role (Front or Back) is used as work_area in Clover shifts
                 "SELECT role FROM tbc.employees WHERE id = %s",
                 (employee_id,))
             row = cursor.fetchone()
@@ -120,8 +123,11 @@ def fetch_clover_shifts():
             raise
 
         # Convert to milliseconds for Clover API ('start of day' to 'end of today' ensuring the latest shifts are included)
-        start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
-        end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+        start_ms = clover_time_handler.readable_to_epoch(start_date.isoformat(), "start")
+        end_ms = clover_time_handler.readable_to_epoch(end_date.isoformat(), "end")
+
+        print(f"Fetching from PST {start_ms}")
+        print(f"Fetching to PST {end_ms}")
 
         # Step 4: Fetch from Clover
         clover_url = f"{CLOVER_BASE_URL}/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
@@ -130,6 +136,7 @@ def fetch_clover_shifts():
             "Accept": "application/json"
         }
         params = [
+            ("limit", 1000),  # Make sure all possible records are returned [Default limit is 100 records]
             ("expand", "employee"),
             ("filter", "has_in_time=true"),
             ("filter", f"in_and_override_time>{start_ms}"),
@@ -145,7 +152,7 @@ def fetch_clover_shifts():
 
         clover_shifts = response.json().get("elements", [])
         print(f"Fetched {len(clover_shifts)} shifts from Clover")
-        pacific = ZoneInfo("America/Los_Angeles")
+        pacific = zoneinfo.ZoneInfo("America/Los_Angeles")
         preview_data = []
         for shift in clover_shifts:
             try:
@@ -201,6 +208,7 @@ def determine_shift_label(time_obj):
     else:
         return "Dinner"
 
+
 @app.route('/api/fetch-clover-shifts-bulk', methods=['POST'])
 def fetch_clover_shifts_bulk():
     try:
@@ -216,7 +224,7 @@ def fetch_clover_shifts_bulk():
             WHERE e.is_active = TRUE
         """)
         employee_map = cursor.fetchall()
-        pacific = ZoneInfo("America/Los_Angeles")
+        pacific = zoneinfo.ZoneInfo("America/Los_Angeles")
 
         imported = 0
         skipped = 0
@@ -231,16 +239,21 @@ def fetch_clover_shifts_bulk():
             print(f"Fetching shifts for employee_id: {employee_id} ({preferred_name})")
 
             # Step 2: Determine date range to fetch
-            cursor.execute(
-                "SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s",
-                (employee_id,))
-            max_date_row = cursor.fetchone()
-            start_date = (max_date_row["max"] or datetime.today().date() - timedelta(days=7)) + timedelta(days=1)
-            end_date = datetime.today().date()
+            try:
+                cursor.execute(
+                    "SELECT MAX(shift_date) FROM tbc.shifts_dummy_20250719 WHERE employee_id = %s",
+                    (employee_id,))
+                max_date_row = cursor.fetchone()
+                start_date = (max_date_row["max"] or datetime.today().date() - timedelta(days=7)) + timedelta(days=1)
+                end_date = datetime.today().date()
+                print(f"Fetching data from Clover between {start_date} and {end_date} for employee {employee_id}")
+            except Exception as date_err:
+                print("Error determining date range:", date_err)
+                raise
 
             # Convert to milliseconds for Clover API
-            start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
-            end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+            start_ms = clover_time_handler.readable_to_epoch(start_date.isoformat(), "start")
+            end_ms = clover_time_handler.readable_to_epoch(end_date.isoformat(), "end")
 
             # Step 3: Fetch from Clover
             clover_url = f"{CLOVER_BASE_URL}/{CLOVER_MERCHANT_ID}/employees/{clover_emp_id}/shifts"
@@ -249,6 +262,7 @@ def fetch_clover_shifts_bulk():
                 "Accept": "application/json"
             }
             params = [
+                ("limit", 1000),  # Make sure all possible records are returned [Default limit is 100 records]
                 ("expand", "employee"),
                 ("filter", "has_in_time=true"),
                 ("filter", f"in_and_override_time>{start_ms}"),
