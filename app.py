@@ -178,7 +178,7 @@ def fetch_clover_shifts():
                     "work_area": work_area,  # Use role from tbc.employees
                     "shift_label": shift_label,
                     "decimal_hours": decimal_hours,
-                    "notes": f"Clover ID: {shift.get('id')}"
+                    "notes": ""
                 })
             except Exception as parse_err:
                 print("Failed to parse shift record:", parse_err)
@@ -298,7 +298,7 @@ def fetch_clover_shifts_bulk():
                         insert_query = """
                             INSERT INTO tbc.staged_shifts (
                                 employee_id, clover_shift_id, shift_date, time_in, time_out,
-                                work_area, shift_label, decimal_hours, notes
+                                work_area, shift_label, decimal_hours
                             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (employee_id, shift_date, time_in, time_out, clover_shift_id) DO NOTHING
                         """
@@ -310,8 +310,7 @@ def fetch_clover_shifts_bulk():
                             time_out,
                             work_area,
                             shift_label,
-                            decimal_hours,
-                            f"Clover ID: {clover_shift_id}"
+                            decimal_hours
                         ))
                         if cursor.rowcount == 1:
                             imported += 1

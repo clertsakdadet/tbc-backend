@@ -42,10 +42,10 @@ def readable_to_epoch(date_str, position, tz_str='America/Los_Angeles'):
 #epoch_ms = 1752994740000 # PST: 2025-07-19T23:59:00-07:00
 #result = epoch_to_readable(epoch_ms)
 
-result = readable_to_epoch("2025-07-15T17:00:00-07:00", "exact")
-print("Start of 2025-07-15 (PST):", result)
-result = readable_to_epoch("2025-07-15T20:30:00-07:00", "exact")
-print("Start of 2025-07-15 (PST):", result)
+result = readable_to_epoch("2025-07-11T17:00:00-07:00", "exact")
+print("Start of 2025-07-11 (PST):", result)
+result = readable_to_epoch("2025-07-11T21:00:00-07:00", "exact")
+print("Start of 2025-07-11 (PST):", result)
 # print("UTC:", result['utc'])
 # print("PST:", result['pst'])
 
