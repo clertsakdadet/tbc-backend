@@ -299,7 +299,7 @@ def fetch_clover_shifts_bulk():
                             INSERT INTO tbc.staged_shifts (
                                 employee_id, clover_shift_id, shift_date, time_in, time_out,
                                 work_area, shift_label, decimal_hours
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (employee_id, shift_date, time_in, time_out, clover_shift_id) DO NOTHING
                         """
                         cursor.execute(insert_query, (
